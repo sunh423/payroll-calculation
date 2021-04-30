@@ -1,4 +1,5 @@
 import openpyxl
+import re
 from itertools import cycle
 from datetime import datetime as dt, timedelta
 
@@ -9,9 +10,9 @@ COLUMN_WIDTH = 7.5
 ROW_HEIGHT = 25
 
 #Color Styles#
-header_silver = openpyxl.styles.PatternFill('solid', fgColor="C0C0C0")
+header_silver = openpyxl.styles.PatternFill('solid', fgColor="E7F2FF")
 corner_black = openpyxl.styles.PatternFill('solid', fgColor="000000")
-box_gray = openpyxl.styles.PatternFill('solid', fgColor='D3D3D3')
+box_gray = openpyxl.styles.PatternFill('solid', fgColor='EBEBEB')
 
 delta_blue = openpyxl.styles.Font(b=True, i=True, color='0070C0')
 
@@ -71,8 +72,25 @@ res = timedelta(minutes=5)
 # if file_name is not None:
 #     break
 # try:
+
+
+    
+
 wb = openpyxl.load_workbook(FileName)
-source = wb['Logs']
+
+def smart_select(src):
+    index_lst = [ws.lower()[:5] for ws in src.sheetnames]
+    print(index_lst)
+    if 'logs-' in index_lst:
+        pos = index_lst.index('logs-')
+        print(f"Input sheet selected: {src.sheetnames[pos]}")
+        return src.sheetnames[pos]
+    else:
+        print("No revised sheet detected; using default Logs.")
+        return 'Logs'
+
+a = smart_select(wb)
+source = wb[a]
 sheet = wb.copy_worksheet(source)
 sheet.title = 'Processed'
 
@@ -80,6 +98,14 @@ calendar = dict.fromkeys(range(1,32), None)
 # print(wb.sheetnames)
 # print(sheet['A1'].value)
 # print(sheet.cell(row=5, column=1).value == 'No :')
+def regex_clean(s):
+    #ensures that all pinyin symbols specifically the colons are transformed into English ones.
+    #does the additional step of stripping any space that is added during handling process
+
+    return re.sub(r'[^\w\s]',':',str(s))
+
+
+
 def set_border(ws, origin, end, double=False):
     rows = ws[f"{origin}:{end}"]
     if double:
@@ -155,7 +181,11 @@ def beg_markers_calc(lst):
 def sub_header(lst):
     r = [sheet[coord].row for coord in lst]
     for coord in r:
-        sheet.cell(row=coord,column=1).fill = box_gray
+        for i in range(1,21):
+            if i == 6:
+                continue
+            else:
+                sheet.cell(row=coord,column=i).fill = header_silver
         sheet.cell(row=coord,column=4).value = "Prev. Hrs:"
         sheet.cell(row=coord,column=4).font = bold_delta
         sheet.cell(row=coord,column=6).border = thin_border
@@ -188,7 +218,11 @@ def row_headers(lst):
         m = input("Enter the month (i.e. April or Apr):")
     for coord in r:
     #Adds month to top left square
-        sheet.cell(row=coord-1,column=1).value = m
+        sheet.cell(row=coord-1,column=1).value = m.title()
+        sheet.cell(row=coord-1,column=1).font = bold_delta
+        sheet.cell(row=coord-1,column=1).alignment = openpyxl.styles.Alignment(horizontal='center')
+        sheet.cell(row=coord-1,column=1).alignment = openpyxl.styles.Alignment(vertical='center')
+        sheet.cell(row=coord-1,column=1).fill = no_fill
     #Adding row headers
         sheet.cell(row=coord+1,column=1).value = "Ck1:"
         sheet.cell(row=coord+2,column=1).value = "Ck2:"
@@ -230,7 +264,7 @@ def splitter(lst):
     tbs = list(zip(tbs_r, beg_r, end_r, nbeg_r, nend_r, dif_r, day_r))
     for emp_t in tbs:
         for col in range(2, 18):
-            cel = sheet.cell(row=emp_t[0],column=col).value
+            cel = regex_clean(sheet.cell(row=emp_t[0],column=col).value)
             if cel is not None:
                 tbi = cel.split()
 
@@ -248,6 +282,10 @@ def splitter(lst):
                     b_delta = timedelta(hours=b_t.hour, minutes=b_t.minute)
                     e_t = dt.strptime(tbi[1], "%H:%M")
                     e_delta = timedelta(hours=e_t.hour, minutes=e_t.minute)
+
+                    #This step is to catch any manually entered end-time that is using 12hr format instead of 24hr. If the end-time is less than beginning clock-in time, then most i.e. 3:00 for 15:00 PM, we will add 12 hours.
+                    if e_delta < b_delta:
+                        e_delta += timedelta(hours=12)
 
                     #storing the day of the week to be used later for lunch deduction highlight
                     day = sheet.cell(row=emp_t[6],column=col).value[:3]
@@ -329,7 +367,6 @@ def resize():
 
 def ot_calc(lst):
     r = [sheet[coord].row for coord in lst]
-    print(r)
     day = None
     for coord in r:
         sum_nodes = []
@@ -351,7 +388,6 @@ def ot_calc(lst):
                         sheet.cell(row=cel.row+1,column=offset_col_start).value = f'={sheet.cell(row=total_r,column=offset_col_start).coordinate}-{sheet.cell(row=ot_r,column=offset_col_start).coordinate}'
                         sheet.cell(row=cel.row+2,column=offset_col_start).number_format = '[h]:mm'
                         sheet.cell(row=cel.row+2,column=offset_col_start).value = f'=IF({sheet.cell(row=total_r,column=offset_col_start).coordinate}-"08:00">0, {sheet.cell(row=total_r,column=offset_col_start).coordinate}-"08:00", 0)'
-                        print(f'Banana: {sheet.cell(row=cel.row+2,column=offset_col_start).coordinate}')
                         start_coord = sheet.cell(row=total_r,column=offset_col_start+1).coordinate
                         end_coord = sheet.cell(row=total_r,column=col-1).coordinate
                     else:
@@ -359,26 +395,20 @@ def ot_calc(lst):
 
                     if start_coord != end_coord:
                         for tple in sheet[f"{start_coord}:{end_coord}"]:
-                            print(tple)
                             for cel in tple:
-                                print(f'Cake: {cel.coordinate}')
                                 sheet.cell(row=cel.row+1,column=cel.column).number_format = '[h]:mm'
                                 sheet.cell(row=cel.row+1,column=cel.column).value = f'={cel.coordinate}-{sheet.cell(row=cel.row+2,column=cel.column).coordinate}'
                                 sheet.cell(row=cel.row+2,column=cel.column).number_format = '[h]:mm'
-                                print(sheet.cell(row=cel.row+2,column=cel.column).value)
                                 sheet.cell(row=cel.row+2,column=cel.column).value = f'=IF({cel.coordinate}-"08:00">0, {cel.coordinate}-"08:00", 0)'
-                                print(sheet.cell(row=cel.row+2,column=cel.column).value)
                                 insert = "+" + cel.coordinate
                                 string_formula = string_formula + insert
                     else:
                         sheet.cell(row=total_r,column=offset_col_start).number_format = '[h]:mm'
-                        print(f'Doughnut: {cel.coordinate}')
                         sheet.cell(row=total_r,column=offset_col_start).value = f'=IF({sheet.cell(row=total_r,column=offset_col_start).coordinate}-"08:00">0, {sheet.cell(row=total_r,column=offset_col_start).coordinate}-"08:00", 0)'
                         string_formula = string_formula + f"+{start_coord}"
 
 
                     if sheet.cell(row=total_r, column=col).value != string_formula:
-                        print(f'Coco: {sheet.cell(row=total_r+2, column=col).coordinate}')
                         sheet.cell(row=total_r, column=col).number_format = '[h]:mm'
                         sheet.cell(row=total_r+1, column=col).number_format = '[h]:mm'
                         sheet.cell(row=total_r+2, column=col).number_format = '[h]:mm'
@@ -478,13 +508,13 @@ def post_format(lst):
         sheet.cell(row=bt_r,column=2).alignment = openpyxl.styles.Alignment(vertical='center')
 
         #Memo box
-        sheet.cell(row=tp_r,column=12).value = "Memo"
-        sheet.cell(row=tp_r,column=12).alignment = openpyxl.styles.Alignment(horizontal='center')
-        sheet.cell(row=tp_r,column=12).alignment = openpyxl.styles.Alignment(vertical='center')
-        sheet.cell(row=tp_r,column=12).font = bold_delta
+        sheet.cell(row=tp_r,column=13).value = "Memo:"
+        sheet.cell(row=tp_r,column=13).alignment = openpyxl.styles.Alignment(horizontal='center')
+        sheet.cell(row=tp_r,column=13).alignment = openpyxl.styles.Alignment(vertical='center')
+        sheet.cell(row=tp_r,column=13).font = bold_delta
 
         #border function setting for memo box
-        set_border(sheet, sheet.cell(row=tp_r,column=12).coordinate, sheet.cell(row=bt_r,column=20).coordinate)
+        set_border(sheet, sheet.cell(row=tp_r,column=13).coordinate, sheet.cell(row=bt_r,column=20).coordinate)
 
         #signature and date title on top right corner
         sheet.cell(row=signature_r,column=20).value = "Signature:"
@@ -493,7 +523,6 @@ def post_format(lst):
         sheet.cell(row=date_r,column=20).alignment = openpyxl.styles.Alignment(vertical='top')
         sheet.cell(row=signature_r,column=20).font = bold_delta
         sheet.cell(row=date_r,column=20).font = bold_delta
-        sheet.cell(row=(coord-1),column=1).fill = corner_black
 
         #Regular, OT and total information on top.
         sheet.cell(row=(coord),column=14).value = "Regular:"
