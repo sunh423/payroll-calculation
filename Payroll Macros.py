@@ -1,10 +1,13 @@
 import openpyxl
 import re
-from itertools import cycle
+from copy import copy
 from datetime import datetime as dt, timedelta
+from itertools import cycle
 
 #enter file name
 FileName = 'Input.xlsx'
+ProcessedName = 'Logs-Dany'
+PossibleLocations = {"GA", "WA", "CA", "NJ", "TX", "END"}
 
 COLUMN_WIDTH = 7.5
 ROW_HEIGHT = 25
@@ -48,22 +51,41 @@ no_fill = openpyxl.styles.PatternFill(None, fgColor='ffffff')
 no_font = openpyxl.styles.Font(b=True, color="000000")
 
 week_order = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun']
-months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+months = {
+    'Jan': '01', 'Feb': '02', 'Mar': '03', 
+    'Apr': '04', 'May': '05', 'Jun': '06',  
+    'Jul': '07', 'Aug': '08', 'Sep': '09', 
+    'Oct': '10', 'Nov': '11', 'Dec': '12'
+    }
+warehouse_schedule = {
+    "WA" : [(8,0),(8,0),(8,0),(16,30),(15,30),(12,0)],
+    "CA" : [(8,0),(8,0),(8,0),(16,00),(16,00),(13,0)],
+    "GA" : [(8,0),(8,0),(8,0),(15,30),(15,30),(13,0)],
+    "NJ" : [(8,0),(8,0),(8,0),(16,30),(15,30),(12,0)]
+}
+
 beg_markers = []
 dims = {}
+extras = ['EX' + str(i) for i in range(1,10)] #Generates 10 extra nom's to be assigned, should be enough.
+lower_date = None
+upper_date = None
+m = None
 
 # schedule_table = {  #(No. , Name)   (Mon Start, Tue-Fri Start, Sat Start, Mon End, Tue-Fri end, Sat End)
 #                    [18,"hongwei"]:[(7,30),(7,30),(7,30),(15,0),(15,0),(12,30)], #GA 7:30-15:00 M-F 	7:30-12:30 SAT
 #                    [20,"peterson"]:[(7,30),(7,30),(7,30),(15,0),(15,0),(12,30)] #GA 7:30-15:00 M-F 	7:30-12:30 SAT
 #                     }
 
+location = input("Which warehouse location is this? (i.e. 'GA'): ").upper()
+while len(location) != 2 or (location not in PossibleLocations):
+    location = input("Which warehouse location is this? (i.e. 'GA'): ").upper()
 #scheduled time in timedelta; t2f = Tuesday to Friday
-mon_b_t = timedelta(hours=8)
-t2f_b_t = timedelta(hours=8)
-sat_b_t = timedelta(hours=8)
-mon_e_t = timedelta(hours=15, minutes=30)
-t2f_e_t = timedelta(hours=15, minutes=30)
-sat_e_t = timedelta(hours=13)
+mon_b_t = timedelta(hours=warehouse_schedule[location][0][0],minutes=warehouse_schedule[location][0][1])
+t2f_b_t = timedelta(hours=warehouse_schedule[location][1][0],minutes=warehouse_schedule[location][1][1])
+sat_b_t = timedelta(hours=warehouse_schedule[location][2][0],minutes=warehouse_schedule[location][2][1])
+mon_e_t = timedelta(hours=warehouse_schedule[location][3][0],minutes=warehouse_schedule[location][3][1])
+t2f_e_t = timedelta(hours=warehouse_schedule[location][4][0],minutes=warehouse_schedule[location][4][1])
+sat_e_t = timedelta(hours=warehouse_schedule[location][5][0],minutes=warehouse_schedule[location][5][1])
 #used for rounding; set to 5 minutes
 res = timedelta(minutes=5)
 
@@ -78,9 +100,53 @@ res = timedelta(minutes=5)
 
 wb = openpyxl.load_workbook(FileName)
 
+def get_t_table(location):
+
+    t_table = dict()
+    wb3 = openpyxl.load_workbook("Master Schedule.xlsx")
+    sheet3 = wb3.active
+    for r in range(6,sheet3.max_row + 1):                             #Binary Search implementation?
+        if sheet3.cell(row=r,column=1).value == location:
+            start_node_r = r
+            break
+    if start_node_r:
+        for r in range(start_node_r + 1, sheet3.max_row + 1):
+            if sheet3.cell(row=r,column=1).value in PossibleLocations:
+                end_node_r = r
+                break
+
+    else:
+        raise ValueError("Something went wrong. Checkpoint: Banana")
+
+    for r in range(start_node_r+1, end_node_r):
+        if sheet3.cell(row=r, column=1).value:
+            k = str(sheet3.cell(row=r, column=1).value)
+        else:
+            continue
+
+        n = sheet3.cell(row=r, column=3).value
+
+        mbt,met = [dt.strptime(t, "%H:%M") for t in sheet3.cell(row=r, column=4).value.split('-')]
+        tbt,tet = [dt.strptime(t, "%H:%M") for t in sheet3.cell(row=r, column=6).value.split('-')]
+        sabt,saet = [dt.strptime(t, "%H:%M") for t in sheet3.cell(row=r, column=9).value.split('-')]
+
+        s1,e1 = timedelta(hours=mbt.hour, minutes=mbt.minute), timedelta(hours=met.hour, minutes=met.minute)
+        s2,e2 = timedelta(hours=tbt.hour, minutes=tbt.minute), timedelta(hours=tet.hour, minutes=tet.minute)
+        s3,e3 = timedelta(hours=sabt.hour, minutes=sabt.minute), timedelta(hours=saet.hour, minutes=saet.minute)
+
+        t_table[k] = [n, s1, e1, s2, e2, s3, e3]
+    return t_table                                   # {no. : [Name, Start1,end1, start2, end2, start3, end3 ]}
+    
+
+def strfdelta(tdelta, fmt):
+    d = {"days": tdelta.days}
+    d["hours"], rem = divmod(tdelta.seconds, 3600)
+    d["minutes"], d["seconds"] = divmod(rem, 60)
+    return fmt.format(**d)
+
+
 def smart_select(src):
     index_lst = [ws.lower()[:5] for ws in src.sheetnames]
-    print(index_lst)
     if 'logs-' in index_lst:
         pos = index_lst.index('logs-')
         print(f"Input sheet selected: {src.sheetnames[pos]}")
@@ -92,7 +158,7 @@ def smart_select(src):
 a = smart_select(wb)
 source = wb[a]
 sheet = wb.copy_worksheet(source)
-sheet.title = 'Processed'
+sheet.title = ProcessedName
 
 calendar = dict.fromkeys(range(1,32), None)
 # print(wb.sheetnames)
@@ -151,6 +217,8 @@ def header():
     sheet.cell(row=2,column=20).value = "are missing time or information. Need to verify."
 
 def dating(lst,cal=calendar):
+    global upper_date
+    global lower_date
 
     #Depending on user input; will shift the days of the week for cycle zip later.
     first_day = input("Enter the first date of the month's day of the week? (i.e. Monday or Mon): ")
@@ -167,6 +235,22 @@ def dating(lst,cal=calendar):
     for row in dates_r:
         for col in range(2, 19):
             cel = sheet.cell(row=row,column=col).value
+
+            if cel != None: #Set upper and lower dates to use for summary generate
+
+                if lower_date != None:
+                    if cel < lower_date:
+                        lower_date = cel
+                else:
+                    lower_date = cel
+
+                if upper_date != None:
+                    if cel > upper_date:
+                        upper_date = cel
+                else:
+                    upper_date = cel
+
+                        #reformat the date header with dates
             if cel in cal.keys():
                 sheet.cell(row=row,column=col).value = f"{cal[cel]} {cel}"
     return cal
@@ -200,6 +284,7 @@ def sub_header(lst):
         sheet.cell(row=coord,column=22).fill = no_fill
         sheet.cell(row=coord,column=23).value = "Comments (internal use):"
         sheet.cell(row=coord,column=21).font = no_font
+        sheet.cell(row=coord,column=6).number_format = "[h]:mm"
 
 #Inserting blank rows; so we can use this for data later
 def space_prep(lst):
@@ -211,11 +296,13 @@ def space_prep(lst):
     lst.clear() #clears the set, to re-calculate the beginning of rows for data insertion.
 
 def row_headers(lst):
+    global m
     sheet.insert_cols(1)
     r = [sheet[coord].row for coord in lst]
     m = input("Enter the month (i.e. April or Apr): ")
-    while (len(m) < 3) or (m[:3].capitalize() not in months):
-        m = input("Enter the month (i.e. April or Apr):")
+    while (len(m) < 3) or (m[:3].capitalize() not in months.keys()):
+        m = input("Enter the month (i.e. April or Apr): ")
+    m = m[:3].capitalize()
     for coord in r:
     #Adds month to top left square
         sheet.cell(row=coord-1,column=1).value = m.title()
@@ -253,6 +340,21 @@ def delta(b,a,dy=""):
     mm = ss / 60 #converts remainder seconds to minutes; there should be no remainder
     return '{:02}:{:02}'.format(int(hh), int(mm)), styl
 
+def unique_sch(sch,sp,num=None):
+    sp_dict = {
+        "mb" : 1,
+        "tb" : 3,
+        "sb" : 5,
+        "me" : 2,
+        "te" : 4,
+        "se" : 6                           
+        }
+    if t_table.get(num):
+        index = sp_dict[sp]
+        return t_table[num][index]
+    else:
+        return sch
+
 def splitter(lst):
     beg_r = [sheet[coord].row+1 for coord in lst]
     end_r = [sheet[coord].row+2 for coord in lst]
@@ -266,7 +368,7 @@ def splitter(lst):
         for col in range(2, 18):
             cel = regex_clean(sheet.cell(row=emp_t[0],column=col).value)
             if cel is not None:
-                tbi = cel.split()
+                tbi = cel.strip().split()
 
                 #converts all working cells to correct format before inputting data
                 for num in range(1,5):
@@ -289,16 +391,20 @@ def splitter(lst):
 
                     #storing the day of the week to be used later for lunch deduction highlight
                     day = sheet.cell(row=emp_t[6],column=col).value[:3]
+
+                    #take note of the current employee's  No.
+                    num = sheet.cell(row=emp_t[1]-1, column=4).value
+
                     #checking the day of the week; in order to know which time to compare to
                     if day == "Mon":
-                        sheet.cell(row=emp_t[3],column=col).value, sheet.cell(row=emp_t[3],column=col).fill = t_round(mon_b_t, 'beg', b_delta) #returns monday rounded beginning time
-                        sheet.cell(row=emp_t[4],column=col).value, sheet.cell(row=emp_t[4],column=col).fill = t_round(mon_e_t, 'end', e_delta)
+                        sheet.cell(row=emp_t[3],column=col).value, sheet.cell(row=emp_t[3],column=col).fill = t_round(unique_sch(mon_b_t, 'mb', num), 'beg', b_delta) #returns monday rounded beginning time
+                        sheet.cell(row=emp_t[4],column=col).value, sheet.cell(row=emp_t[4],column=col).fill = t_round(unique_sch(mon_e_t, 'me', num), 'end', e_delta)
                     elif day == "Sat":
-                        sheet.cell(row=emp_t[3],column=col).value, sheet.cell(row=emp_t[3],column=col).fill = t_round(sat_b_t, 'beg', b_delta)
-                        sheet.cell(row=emp_t[4],column=col).value, sheet.cell(row=emp_t[4],column=col).fill = t_round(sat_e_t, 'end', e_delta)
+                        sheet.cell(row=emp_t[3],column=col).value, sheet.cell(row=emp_t[3],column=col).fill = t_round(unique_sch(sat_b_t, 'sb', num), 'beg', b_delta)
+                        sheet.cell(row=emp_t[4],column=col).value, sheet.cell(row=emp_t[4],column=col).fill = t_round(unique_sch(sat_e_t, 'se', num), 'end', e_delta)
                     elif (day in week_order) and (day != "Sun"): #assuming that it's Tuesday-Friday
-                        sheet.cell(row=emp_t[3],column=col).value, sheet.cell(row=emp_t[3],column=col).fill = t_round(t2f_b_t, 'beg', b_delta)
-                        sheet.cell(row=emp_t[4],column=col).value, sheet.cell(row=emp_t[4],column=col).fill = t_round(t2f_e_t, 'end', e_delta)
+                        sheet.cell(row=emp_t[3],column=col).value, sheet.cell(row=emp_t[3],column=col).fill = t_round(unique_sch(t2f_b_t, 'tb', num), 'beg', b_delta)
+                        sheet.cell(row=emp_t[4],column=col).value, sheet.cell(row=emp_t[4],column=col).fill = t_round(unique_sch(t2f_e_t, 'te', num), 'end', e_delta)
                     else:
                         #Sundays are not expected; script will not round and then fill it orange.
                         _ = input("Just so you know! There is a Sunday work hours. Please investigate. If there's Sunday, OT total needs to be recalculated.")
@@ -318,45 +424,45 @@ def splitter(lst):
 
 
 def t_round(sch_delta,typ,a_delta):
-                            if typ not in {'beg','end'}:
-                                raise ValueError("Type must be specified as 'beg' or 'end'.")
-                            rd_true = 0 #resets rd_true variable; just in case
-                            styl = no_fill #resets default styling as no fill
-                            if typ == 'beg': #calcualting beginning hours using beginning rounding method -> up 5
-                                if a_delta > sch_delta: #if late
-                                    rd_true = a_delta.total_seconds() % res.total_seconds()
-                                    if rd_true:
-                                        a_delta += timedelta(seconds=int(300 - rd_true)) #Adds the amount needed to get to next nearest 5 minutes
-                                elif a_delta < sch_delta:
-                                    if (sch_delta.total_seconds() - a_delta.total_seconds()) / 60 >= 30: #if earlier than 30 minutes; need to highlight after rounding
-                                        styl = yellow_ot
-                                        rd_true = a_delta.total_seconds() % res.total_seconds()
-                                        if rd_true:
-                                            a_delta += timedelta(seconds=int(300 - rd_true)) #Adds the amount needed to get to next nearest 5 minutes
-                                            
-                                    else:
-                                        a_delta = sch_delta
+    if typ not in {'beg','end'}:
+        raise ValueError("Type must be specified as 'beg' or 'end'.")
+    rd_true = 0 #resets rd_true variable; just in case
+    styl = no_fill #resets default styling as no fill
+    if typ == 'beg': #calcualting beginning hours using beginning rounding method -> up 5
+        if a_delta > sch_delta: #if late
+            rd_true = a_delta.total_seconds() % res.total_seconds()
+            if rd_true:
+                a_delta += timedelta(seconds=int(300 - rd_true)) #Adds the amount needed to get to next nearest 5 minutes
+        elif a_delta < sch_delta:
+            if (sch_delta.total_seconds() - a_delta.total_seconds()) / 60 >= 30: #if earlier than 30 minutes; need to highlight after rounding
+                styl = yellow_ot
+                rd_true = a_delta.total_seconds() % res.total_seconds()
+                if rd_true:
+                    a_delta += timedelta(seconds=int(300 - rd_true)) #Adds the amount needed to get to next nearest 5 minutes
+                    
+            else:
+                a_delta = sch_delta
 
-                            elif typ == 'end': 
-                                if a_delta > sch_delta: #if worked longer than scheduled hours
-                                    if (a_delta.total_seconds() - sch_delta.total_seconds()) / 60 >= 15: #15 minutes end or more.
-                                        styl = yellow_ot
-                                        rd_true = a_delta.total_seconds() % res.total_seconds()
-                                        if rd_true:
-                                            a_delta -= timedelta(seconds=int(rd_true)) #Subtract the modulo to get to the floored nearest 5 minutes.
-                                    else: #if greater; but not 30 minutes or more. We assume there is no over-time.
-                                        a_delta = sch_delta
-                                elif a_delta < sch_delta: #if less than scheduled time; we assume that they left work early, floor to the last 5 minutes.
-                                    styl = purple_timeoff
-                                    rd_true = a_delta.total_seconds() % res.total_seconds()
-                                    if rd_true:
-                                        a_delta -= timedelta(seconds=int(rd_true))
-                            s = a_delta.total_seconds()
-                            hh, ss = divmod(s, 3600) #converts raw total seconds of a_delta to hours.
-                            mm = ss / 60 #converts remainder seconds to minutes; there should be no remainder
-                            # print('{:02}:{:02}'.format(int(hh), int(mm)))
-                            # print('{:02d}:{:02d}'.format(int(hh), int(mm)))
-                            return '{:02}:{:02}'.format(int(hh), int(mm)), styl
+    elif typ == 'end': 
+        if a_delta > sch_delta: #if worked longer than scheduled hours
+            if (a_delta.total_seconds() - sch_delta.total_seconds()) / 60 >= 15: #15 minutes end or more.
+                styl = yellow_ot
+                rd_true = a_delta.total_seconds() % res.total_seconds()
+                if rd_true:
+                    a_delta -= timedelta(seconds=int(rd_true)) #Subtract the modulo to get to the floored nearest 5 minutes.
+            else: #if greater; but not 30 minutes or more. We assume there is no over-time.
+                a_delta = sch_delta
+        elif a_delta < sch_delta: #if less than scheduled time; we assume that they left work early, floor to the last 5 minutes.
+            styl = purple_timeoff
+            rd_true = a_delta.total_seconds() % res.total_seconds()
+            if rd_true:
+                a_delta -= timedelta(seconds=int(rd_true))
+    s = a_delta.total_seconds()
+    hh, ss = divmod(s, 3600) #converts raw total seconds of a_delta to hours.
+    mm = ss / 60 #converts remainder seconds to minutes; there should be no remainder
+    # print('{:02}:{:02}'.format(int(hh), int(mm)))
+    # print('{:02d}:{:02d}'.format(int(hh), int(mm)))
+    return '{:02}:{:02}'.format(int(hh), int(mm)), styl
 
 def resize():
     for i in range(2,26):
@@ -499,6 +605,18 @@ def post_format(lst):
         signature_r = coord + 3
         date_r = coord + 6
 
+        if sheet.cell(row=coord,column=4).value:
+            num = sheet.cell(row=coord,column=4).value
+        else:
+            num = None
+        if t_table.get(num):
+            sheet.cell(row=coord+3,column=24).value = 'Mon:'
+            sheet.cell(row=coord+3,column=25).value = f'{strfdelta(t_table[num][1], "{hours:02d}:{minutes:02d}")}-{strfdelta(t_table[num][2], "{hours:02d}:{minutes:02d}")}'
+            sheet.cell(row=coord+4,column=24).value = 'Tue-Thur:'
+            sheet.cell(row=coord+4,column=25).value = f'{strfdelta(t_table[num][3], "{hours:02d}:{minutes:02d}")}-{strfdelta(t_table[num][4], "{hours:02d}:{minutes:02d}")}'
+            sheet.cell(row=coord+5,column=24).value = 'Sat:'
+            sheet.cell(row=coord+5,column=25).value = f'{strfdelta(t_table[num][5], "{hours:02d}:{minutes:02d}")}-{strfdelta(t_table[num][6], "{hours:02d}:{minutes:02d}")}'
+
         #Compliance legal agreement, center the text
         sheet.cell(row=tp_r,column=2).value = "I attest that the hours I recorded as my time worked are accurate.I accurately recorded"
         sheet.cell(row=md_r,column=2).value = "all time worked and did not complete any required work duties outside of the recorded time."
@@ -551,10 +669,10 @@ def post_format(lst):
         #Create comments box
         for c in range(24,33):
             for r in range(0,8):
-                if sheet.cell(row=coord+r,column=c).value == "Comments (internal use):":
-                    sheet.cell(row=coord+r,column=c).font = crim_note  #Ensures our original comment doesnt get reset
                 sheet.cell(row=coord+r,column=c).font = no_font
                 sheet.cell(row=coord+r,column=c).fill = box_gray
+                if sheet.cell(row=coord+r,column=c).value == "Comments (internal use):":
+                    sheet.cell(row=coord+r,column=c).font = crim_note  #Ensures our original comment doesnt get reset
         start_node = sheet.cell(row=coord,column=24).coordinate
         end_node = sheet.cell(row=coord+7,column=32).coordinate
         set_border(sheet,start_node,end_node)
@@ -570,17 +688,86 @@ def post_format(lst):
         start_node2 = sheet.cell(row=coord-1,column=1).coordinate
         end_node2 = sheet.cell(row=coord+12,column=21).coordinate
         set_border(sheet, start_node2, end_node2, True)
+
+        sheet["B4"].value = "Standard Schedule"
+        sheet["B4"].font = bold_delta
+        sheet["E4"].value = "Mon:"
+        sheet["E4"].font = bold_delta
+        sheet["F4"].value = f'{strfdelta(mon_b_t, "{hours:02d}:{minutes:02d}")}-{strfdelta(mon_e_t, "{hours:02d}:{minutes:02d}")}'
+        sheet["H4"].value = "Tue-Fri:"
+        sheet["H4"].font = bold_delta
+        sheet["I4"].value = f'{strfdelta(t2f_b_t, "{hours:02d}:{minutes:02d}")}-{strfdelta(t2f_e_t, "{hours:02d}:{minutes:02d}")}'
+        sheet["L4"].value = "Sat:"
+        sheet["L4"].font = bold_delta
+        sheet["M4"].value = f'{strfdelta(sat_b_t, "{hours:02d}:{minutes:02d}")}-{strfdelta(sat_e_t, "{hours:02d}:{minutes:02d}")}'
+        
     #print settings
     sheet.print_options.horizontalCentered = True
     sheet.print_options.verticalCentered = True
     #inserts spacers on top of each form section; does not affect data.
     # sheet.row_dimensions.group(coord+10, coord+10, hidden=True)
 
+def generate_summary(lst, template="Summary Template.xlsx"):                #dic format->      no. : [summary row spot, name, Rgr coord, OT coord]
+    arr = dict()
+    it_row = 7      #On summary template, the blank entries start at 7, this counter is used to assign "spot" for each person.
     
+    wb2 = openpyxl.load_workbook(template)
+    tmp = wb2.active
+    mr = tmp.max_row
+    mc = tmp.max_column
 
+    for r in [sheet[coord].row for coord in lst]:
+        if sheet.cell(row=r,column=12).value != None:         #Check to make sure there's an employee entry
+            if sheet.cell(row=r,column=4).value == None:          #If no number assigned (manual employee), assign a number.
+                sheet.cell(row=r,column=4).value = extras.pop(0)
+            c = sheet.cell(row=r,column=4).value
+            name = sheet.cell(row=r,column=12).value
+            rgr_xy = sheet.cell(row=r,column=15).coordinate
+            ot_xy =sheet.cell(row=r,column=17).coordinate
+            arr[c] = [it_row, name, rgr_xy, ot_xy]
+            it_row += 1
+        
+    del wb["Summary"]
+    sheet2 = wb.create_sheet("Summary")
+    sheet2.title = "Summary"
 
+    for i in range(1, mr+1):
+        for j in range(1, mc+1):
+            j_char = openpyxl.utils.get_column_letter(j)
+            sheet2.column_dimensions[j_char].width = 13
+            sheet2.row_dimensions[i].height = 30
+            c = tmp.cell(row = i, column = j)
+            sheet2.cell(row = i, column = j).value = c.value
+            sheet2.cell(row = i, column = j).font = copy(c.font)
+            sheet2.cell(row = i, column = j).alignment = copy(c.alignment)
+            sheet2.cell(row = i, column = j).fill = copy(c.fill)
+            sheet2.cell(row = i, column = j).border = copy(c.border)
+
+            if j in {4, 6, 8, 10}: 
+                sheet2.cell(row = i, column = j).number_format = copy(c.number_format)
+
+    for k, v in arr.items():
+        sheet2.cell(row = v[0], column = 1).value = k
+        sheet2.cell(row = v[0], column = 2).value = v[1]
+        if t_table.get(k):
+            sheet2.cell(row = v[0], column = 3).value = t_table[k][0]
+        sheet2.cell(row = v[0], column = 4).value = f"='{ProcessedName}'!{v[2]}"
+        sheet2.cell(row = v[0], column = 6).value = f"='{ProcessedName}'!{v[3]}"
     
+    sheet2['C3'].value = f'{months[m]}/{lower_date:02d}-{months[m]}/{upper_date:02d}'
+    sheet2['A6'].value = f'{location.upper()}'
+    
+    sheet2.merge_cells('A1:O1')
+    sheet2.merge_cells('A2:O2')
+    sheet2.merge_cells('A3:B3')
+    sheet2.merge_cells('C3:K3')
+    sheet2.merge_cells('A4:A5')
+    sheet2.merge_cells('B4:B5')
+    sheet2.merge_cells('C4:C5')
+    sheet2.merge_cells('A6:O6')
+        
 #Steps 
+t_table = get_t_table(location)
 header()
 beg_markers_calc(beg_markers)
 sub_header(beg_markers)
@@ -595,6 +782,7 @@ print("splitters success")
 ot_calc(beg_markers)
 post_format(beg_markers)
 resize()
+generate_summary(beg_markers)
 print("Success!")
 
 
