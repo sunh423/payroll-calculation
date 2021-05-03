@@ -67,8 +67,6 @@ warehouse_schedule = {
 beg_markers = []
 dims = {}
 extras = ['EX' + str(i) for i in range(1,10)] #Generates 10 extra nom's to be assigned, should be enough.
-lower_date = None
-upper_date = None
 m = None
 
 # schedule_table = {  #(No. , Name)   (Mon Start, Tue-Fri Start, Sat Start, Mon End, Tue-Fri end, Sat End)
@@ -149,11 +147,13 @@ def smart_select(src):
     index_lst = [ws.lower()[:5] for ws in src.sheetnames]
     if 'logs-' in index_lst:
         pos = index_lst.index('logs-')
-        print(f"Input sheet selected: {src.sheetnames[pos]}")
-        return src.sheetnames[pos]
+    elif 'logs ' in index_lst:
+        pos = index_lst.index('logs ')
     else:
         print("No revised sheet detected; using default Logs.")
         return 'Logs'
+    print(f"Input sheet selected: {src.sheetnames[pos]}")
+    return src.sheetnames[pos]
 
 a = smart_select(wb)
 source = wb[a]
@@ -199,7 +199,10 @@ def set_border(ws, origin, end, double=False):
 def header():
     sheet.cell(row=1,column=1).font = no_font
     sheet.cell(row=1,column=1).alignment = openpyxl.styles.Alignment(horizontal='left') 
-    sheet.unmerge_cells('A1:AE2')
+    try:
+        sheet.unmerge_cells('A1:AE2')
+    except:
+        pass
     sheet.cell(row=1,column=1).value = "Yellow highlights"
     sheet.cell(row=1,column=1).font = yellow
     sheet.cell(row=2,column=1).value = "are assumed OT."
@@ -217,9 +220,6 @@ def header():
     sheet.cell(row=2,column=20).value = "are missing time or information. Need to verify."
 
 def dating(lst,cal=calendar):
-    global upper_date
-    global lower_date
-
     #Depending on user input; will shift the days of the week for cycle zip later.
     first_day = input("Enter the first date of the month's day of the week? (i.e. Monday or Mon): ")
     while (len(first_day) < 3) or (first_day[:3].capitalize() not in week_order):
@@ -235,21 +235,6 @@ def dating(lst,cal=calendar):
     for row in dates_r:
         for col in range(2, 19):
             cel = sheet.cell(row=row,column=col).value
-
-            if cel != None: #Set upper and lower dates to use for summary generate
-
-                if lower_date != None:
-                    if cel < lower_date:
-                        lower_date = cel
-                else:
-                    lower_date = cel
-
-                if upper_date != None:
-                    if cel > upper_date:
-                        upper_date = cel
-                else:
-                    upper_date = cel
-
                         #reformat the date header with dates
             if cel in cal.keys():
                 sheet.cell(row=row,column=col).value = f"{cal[cel]} {cel}"
@@ -486,7 +471,7 @@ def ot_calc(lst):
             try:
                 day = sheet.cell(row=d_r,column=col).value[:3]
             except TypeError: #If there is no more date, then we have reached the last day of the payroll.
-                if (last_sunday is not None) and (col != last_sunday): #If there is a previous Sunday, meaning that the day after we have not calc OT for yet. Same calculation using day after last Sunday and one day before calendar runs out)
+                if (last_sunday is not None) and (col-1 != last_sunday): #If there is a previous Sunday, meaning that the day after we have not calc OT for yet. Same calculation using day after last Sunday and one day before calendar runs out)
                     offset_col_start = last_sunday.column + 1
                     if offset_col_start + 1 != col: #If there is a day between the last Sunday on the payroll and the end date, then we can do calculation"
                         string_formula = sheet.cell(row=total_r,column=offset_col_start).coordinate #sets string formula to the first number; keep in mind .
@@ -496,40 +481,40 @@ def ot_calc(lst):
                         sheet.cell(row=cel.row+2,column=offset_col_start).value = f'=IF({sheet.cell(row=total_r,column=offset_col_start).coordinate}-"08:00">0, {sheet.cell(row=total_r,column=offset_col_start).coordinate}-"08:00", 0)'
                         start_coord = sheet.cell(row=total_r,column=offset_col_start+1).coordinate
                         end_coord = sheet.cell(row=total_r,column=col-1).coordinate
-                    else:
-                        continue #Break out of loop and move on to next col
+                else:
+                    continue #Break out of loop and move on to next col
 
-                    if start_coord != end_coord:
-                        for tple in sheet[f"{start_coord}:{end_coord}"]:
-                            for cel in tple:
-                                sheet.cell(row=cel.row+1,column=cel.column).number_format = '[h]:mm'
-                                sheet.cell(row=cel.row+1,column=cel.column).value = f'={cel.coordinate}-{sheet.cell(row=cel.row+2,column=cel.column).coordinate}'
-                                sheet.cell(row=cel.row+2,column=cel.column).number_format = '[h]:mm'
-                                sheet.cell(row=cel.row+2,column=cel.column).value = f'=IF({cel.coordinate}-"08:00">0, {cel.coordinate}-"08:00", 0)'
-                                insert = "+" + cel.coordinate
-                                string_formula = string_formula + insert
-                    else:
-                        sheet.cell(row=total_r,column=offset_col_start).number_format = '[h]:mm'
-                        sheet.cell(row=total_r,column=offset_col_start).value = f'=IF({sheet.cell(row=total_r,column=offset_col_start).coordinate}-"08:00">0, {sheet.cell(row=total_r,column=offset_col_start).coordinate}-"08:00", 0)'
-                        string_formula = string_formula + f"+{start_coord}"
+                if start_coord != end_coord:
+                    for tple in sheet[f"{start_coord}:{end_coord}"]:
+                        for cel in tple:
+                            sheet.cell(row=cel.row+1,column=cel.column).number_format = '[h]:mm'
+                            sheet.cell(row=cel.row+1,column=cel.column).value = f'={cel.coordinate}-{sheet.cell(row=cel.row+2,column=cel.column).coordinate}'
+                            sheet.cell(row=cel.row+2,column=cel.column).number_format = '[h]:mm'
+                            sheet.cell(row=cel.row+2,column=cel.column).value = f'=IF({cel.coordinate}-"08:00">0, {cel.coordinate}-"08:00", 0)'
+                            insert = "+" + cel.coordinate
+                            string_formula = string_formula + insert
+                else:
+                    sheet.cell(row=total_r,column=offset_col_start).number_format = '[h]:mm'
+                    sheet.cell(row=total_r,column=offset_col_start).value = f'=IF({sheet.cell(row=total_r,column=offset_col_start).coordinate}-"08:00">0, {sheet.cell(row=total_r,column=offset_col_start).coordinate}-"08:00", 0)'
+                    string_formula = string_formula + f"+{start_coord}"
 
 
-                    if sheet.cell(row=total_r, column=col).value != string_formula:
-                        sheet.cell(row=total_r, column=col).number_format = '[h]:mm'
-                        sheet.cell(row=total_r+1, column=col).number_format = '[h]:mm'
-                        sheet.cell(row=total_r+2, column=col).number_format = '[h]:mm'
-                        sheet.cell(row=total_r, column=col).font = delta_blue
-                        sheet.cell(row=total_r, column=col).value = f"={string_formula}"
-                        sheet.cell(row=total_r+1, column=col).font = delta_blue
-                        sheet.cell(row=total_r+1, column=col).value = f'={sheet.cell(row=total_r, column=col).coordinate}-{sheet.cell(row=ot_r,column=col).coordinate}'
-                        sheet.cell(row=total_r+2, column=col).font = delta_blue
-                        sheet.cell(row=total_r+2, column=col).value = f'=IF({sheet.cell(row=total_r, column=col).coordinate}-"40:00">0, {sheet.cell(row=total_r, column=col).coordinate}-"40:00", 0)'
-                    last_sunday = None
-                    sum_nodes.append(sheet.cell(row=total_r, column=col).coordinate)
-                    ot_nodes.append(sheet.cell(row=ot_r, column=col).coordinate)
+                if sheet.cell(row=total_r, column=col).value != string_formula:
+                    sheet.cell(row=total_r, column=col).number_format = '[h]:mm'
+                    sheet.cell(row=total_r+1, column=col).number_format = '[h]:mm'
+                    sheet.cell(row=total_r+2, column=col).number_format = '[h]:mm'
+                    sheet.cell(row=total_r, column=col).font = delta_blue
+                    sheet.cell(row=total_r, column=col).value = f"={string_formula}"
+                    sheet.cell(row=total_r+1, column=col).font = delta_blue
+                    sheet.cell(row=total_r+1, column=col).value = f'={sheet.cell(row=total_r, column=col).coordinate}-{sheet.cell(row=ot_r,column=col).coordinate}'
+                    sheet.cell(row=total_r+2, column=col).font = delta_blue
+                    sheet.cell(row=total_r+2, column=col).value = f'=IF({sheet.cell(row=total_r, column=col).coordinate}-"40:00">0, {sheet.cell(row=total_r, column=col).coordinate}-"40:00", 0)'
+                last_sunday = None #End of the calculation, reset last_sunday for next person's payroll.
+                sum_nodes.append(sheet.cell(row=total_r, column=col).coordinate)
+                ot_nodes.append(sheet.cell(row=ot_r, column=col).coordinate)
         
             # If it's Sunday (beginning to middle back check)
-            if day == "Sun":
+            if day == "Sun": #We only start calculating when its sunday.
                 offset_col_start = col - 6
                 offset_col_end = col - 1
                 while offset_col_start < 2: #bringing up the minimum so theres no out of bound index error
@@ -545,19 +530,23 @@ def ot_calc(lst):
                     sheet.cell(row=total_r+2,column=offset_col_start).value = f'=IF({sheet.cell(row=total_r,column=offset_col_start).coordinate}-"08:00">0, {sheet.cell(row=total_r,column=offset_col_start).coordinate}-"08:00", 0)'
                     start_coord = sheet.cell(row=total_r,column=offset_col_start+1).coordinate
                     end_coord = sheet.cell(row=total_r,column=offset_col_end).coordinate
-                    if start_coord != end_coord:
+                    if start_coord != end_coord and offset_col_start != sheet[end_coord].column:
                         for tple in sheet[f"{start_coord}:{end_coord}"]:
                             for cel in tple:
                                 sheet.cell(row=cel.row+1,column=cel.column).number_format = '[h]:mm'
                                 sheet.cell(row=cel.row+1,column=cel.column).value = f'={sheet.cell(row=total_r,column=cel.column).coordinate}-{sheet.cell(row=ot_r,column=cel.column).coordinate}'
                                 sheet.cell(row=cel.row+2,column=cel.column).number_format = '[h]:mm'
-                                sheet.cell(row=cel.row+2,column=cel.column).value = f'=IF({cel.coordinate}-"08:00">0, {cel.coordinate}-"08:00", 0)'
+                                sheet.cell(row=cel.row+2,column=cel.column).value = f'=IF({sheet.cell(row=cel.row,column=cel.column).coordinate}-"08:00">0, {sheet.cell(row=cel.row,column=cel.column).coordinate}-"08:00", 0)'
                                 insert = "+" + cel.coordinate
                                 string_formula = string_formula + insert
-                    else:
-                        sheet.cell(row=total_r,column=offset_col_start).number_format = '[h]:mm'
-                        sheet.cell(row=total_r,column=offset_col_start).value = f'=IF({sheet.cell(row=total_r,column=offset_col_start).coordinate}-"08:00">0, {sheet.cell(row=total_r,column=offset_col_start).coordinate}-"08:00", 0)'
-                        string_formula = string_formula + f"+ {start_coord}"
+                    elif start_coord != end_coord and offset_col_start == sheet[end_coord].column:
+                        pass
+                    else: #if start_coord == end_coord, aka First day of the payroll is a Saturday, then Sunday calculation is only string_formula
+                        sheet.cell(row=total_r+1,column=sheet[end_coord].column).number_format = '[h]:mm'
+                        sheet.cell(row=total_r+1,column=sheet[end_coord].column).value = f'={sheet.cell(row=total_r,column=sheet[end_coord].column).coordinate}-{sheet.cell(row=ot_r,column=sheet[end_coord].column).coordinate}'
+                        sheet.cell(row=total_r+2,column=sheet[end_coord].column).number_format = '[h]:mm'
+                        sheet.cell(row=total_r+2,column=sheet[end_coord].column).value = f'=IF({sheet.cell(row=total_r,column=sheet[end_coord].column).coordinate}-"08:00">0, {sheet.cell(row=total_r,column=sheet[end_coord].column).coordinate}-"08:00", 0)'
+                        string_formula = string_formula + f"+ {end_coord}"
                     if sheet.cell(row=total_r, column=col).value != string_formula:
                         sheet.cell(row=total_r, column=col).number_format = '[h]:mm'
                         sheet.cell(row=total_r+1, column=col).number_format = '[h]:mm'
@@ -606,13 +595,13 @@ def post_format(lst):
         date_r = coord + 6
 
         if sheet.cell(row=coord,column=4).value:
-            num = sheet.cell(row=coord,column=4).value
+            num = str(sheet.cell(row=coord,column=4).value)
         else:
             num = None
         if t_table.get(num):
             sheet.cell(row=coord+3,column=24).value = 'Mon:'
             sheet.cell(row=coord+3,column=25).value = f'{strfdelta(t_table[num][1], "{hours:02d}:{minutes:02d}")}-{strfdelta(t_table[num][2], "{hours:02d}:{minutes:02d}")}'
-            sheet.cell(row=coord+4,column=24).value = 'Tue-Thur:'
+            sheet.cell(row=coord+4,column=24).value = 'Tue-Fri:'
             sheet.cell(row=coord+4,column=25).value = f'{strfdelta(t_table[num][3], "{hours:02d}:{minutes:02d}")}-{strfdelta(t_table[num][4], "{hours:02d}:{minutes:02d}")}'
             sheet.cell(row=coord+5,column=24).value = 'Sat:'
             sheet.cell(row=coord+5,column=25).value = f'{strfdelta(t_table[num][5], "{hours:02d}:{minutes:02d}")}-{strfdelta(t_table[num][6], "{hours:02d}:{minutes:02d}")}'
@@ -726,7 +715,8 @@ def generate_summary(lst, template="Summary Template.xlsx"):                #dic
             ot_xy =sheet.cell(row=r,column=17).coordinate
             arr[c] = [it_row, name, rgr_xy, ot_xy]
             it_row += 1
-        
+    
+    period = wb["Summary"]["B2"].value
     del wb["Summary"]
     sheet2 = wb.create_sheet("Summary")
     sheet2.title = "Summary"
@@ -754,7 +744,6 @@ def generate_summary(lst, template="Summary Template.xlsx"):                #dic
         sheet2.cell(row = v[0], column = 4).value = f"='{ProcessedName}'!{v[2]}"
         sheet2.cell(row = v[0], column = 6).value = f"='{ProcessedName}'!{v[3]}"
     
-    sheet2['C3'].value = f'{months[m]}/{lower_date:02d}-{months[m]}/{upper_date:02d}'
     sheet2['A6'].value = f'{location.upper()}'
     
     sheet2.merge_cells('A1:O1')
